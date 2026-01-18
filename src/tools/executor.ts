@@ -12,6 +12,15 @@ export interface ToolResult {
   error?: string;
 }
 
+export interface ClaudeCodeResult {
+  success: boolean;
+  output: string;
+  plan?: string;
+  filesChanged?: string[];
+  summary?: string;
+  error?: string;
+}
+
 export class ToolExecutor {
   private repoPath: string;
   private maxOutputLength = 10000; // Limit output to avoid token explosion
@@ -240,6 +249,217 @@ export class ToolExecutor {
       success: true,
       output: `Successfully applied diff to ${filePath}`,
     };
+  }
+
+  /**
+   * Run Claude Code CLI to generate a plan (no changes made)
+   * Returns a detailed plan of what Claude Code would do
+   */
+  async runClaudeCodePlan(task: string): Promise<ClaudeCodeResult> {
+    const planPrompt = `Analyze this task and create a detailed implementation plan. DO NOT make any changes yet.
+List exactly which files you would modify or create, and what changes you would make to each.
+
+Task: ${task}
+
+Output format:
+## Files to Modify
+- path/to/file1.ts: description of changes
+- path/to/file2.ts: description of changes
+
+## New Files to Create
+- path/to/new-file.ts: purpose
+
+## Implementation Steps
+1. Step one
+2. Step two
+...
+
+## Estimated Complexity
+Simple/Medium/Complex
+
+DO NOT execute any changes. Only provide the plan.`;
+
+    try {
+      // Check if Claude Code CLI is available
+      try {
+        await execAsync('which claude || command -v claude', { cwd: this.repoPath });
+      } catch {
+        return {
+          success: false,
+          output: '',
+          error: 'Claude Code CLI not installed. Falling back to basic tools.',
+        };
+      }
+
+      const escapedPrompt = planPrompt.replace(/"/g, '\\"').replace(/\n/g, '\\n');
+      const command = `claude --print "${escapedPrompt}"`;
+
+      console.log('[ClaudeCode] Generating plan...');
+      
+      const { stdout, stderr } = await execAsync(command, {
+        cwd: this.repoPath,
+        maxBuffer: 1024 * 1024 * 10, // 10MB
+        timeout: 300000, // 5 minute timeout for planning
+        env: {
+          ...process.env,
+          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+        },
+      });
+
+      const output = stdout + (stderr ? `\n${stderr}` : '');
+      
+      // Parse files from the plan
+      const filesChanged = this.parseFilesFromPlan(output);
+
+      return {
+        success: true,
+        output: this.truncateOutput(output),
+        plan: output,
+        filesChanged,
+        summary: this.summarizePlan(output),
+      };
+    } catch (error) {
+      const execError = error as { stdout?: string; stderr?: string; message: string };
+      console.error('[ClaudeCode] Plan generation failed:', execError.message);
+      return {
+        success: false,
+        output: execError.stdout || '',
+        error: execError.stderr || execError.message,
+      };
+    }
+  }
+
+  /**
+   * Run Claude Code CLI to execute a task (makes actual changes)
+   * Should only be called after plan is approved
+   */
+  async runClaudeCodeExecute(task: string, approvedPlan?: string): Promise<ClaudeCodeResult> {
+    try {
+      // Check if Claude Code CLI is available
+      try {
+        await execAsync('which claude || command -v claude', { cwd: this.repoPath });
+      } catch {
+        return {
+          success: false,
+          output: '',
+          error: 'Claude Code CLI not installed.',
+        };
+      }
+
+      const executePrompt = approvedPlan 
+        ? `Execute this approved plan:\n\n${approvedPlan}\n\nOriginal task: ${task}`
+        : task;
+
+      const escapedPrompt = executePrompt.replace(/"/g, '\\"').replace(/\n/g, '\\n');
+      
+      // --print outputs to stdout, --dangerously-skip-permissions allows autonomous changes
+      const command = `claude --print --dangerously-skip-permissions "${escapedPrompt}"`;
+
+      console.log('[ClaudeCode] Executing task...');
+      
+      const { stdout, stderr } = await execAsync(command, {
+        cwd: this.repoPath,
+        maxBuffer: 1024 * 1024 * 10, // 10MB
+        timeout: 600000, // 10 minute timeout for execution
+        env: {
+          ...process.env,
+          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+        },
+      });
+
+      const output = stdout + (stderr ? `\n${stderr}` : '');
+      
+      // Try to find which files were modified
+      const filesChanged = await this.getModifiedFiles();
+
+      return {
+        success: true,
+        output: this.truncateOutput(output),
+        filesChanged,
+        summary: this.summarizeExecution(output, filesChanged),
+      };
+    } catch (error) {
+      const execError = error as { stdout?: string; stderr?: string; message: string };
+      console.error('[ClaudeCode] Execution failed:', execError.message);
+      return {
+        success: false,
+        output: execError.stdout || '',
+        error: execError.stderr || execError.message,
+      };
+    }
+  }
+
+  /**
+   * Get list of modified files using git status
+   */
+  private async getModifiedFiles(): Promise<string[]> {
+    try {
+      const { stdout } = await execAsync('git status --porcelain', { cwd: this.repoPath });
+      return stdout
+        .split('\n')
+        .filter(line => line.trim())
+        .map(line => line.slice(3).trim()); // Remove status prefix (M, A, etc.)
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Parse file paths from a Claude Code plan
+   */
+  private parseFilesFromPlan(plan: string): string[] {
+    const files: string[] = [];
+    const lines = plan.split('\n');
+    
+    for (const line of lines) {
+      // Match patterns like "- path/to/file.ts:" or "- `path/to/file.ts`"
+      const match = line.match(/^-\s+[`"]?([^:`"]+\.[a-z]+)[`"]?:/i);
+      if (match) {
+        files.push(match[1].trim());
+      }
+    }
+    
+    return [...new Set(files)]; // Remove duplicates
+  }
+
+  /**
+   * Create a brief summary of the plan
+   */
+  private summarizePlan(plan: string): string {
+    const files = this.parseFilesFromPlan(plan);
+    const hasNewFiles = plan.toLowerCase().includes('new files to create');
+    
+    let summary = `📋 **Plan Summary**\n`;
+    summary += `- Files to modify: ${files.length}\n`;
+    if (hasNewFiles) summary += `- Will create new files\n`;
+    
+    // Extract complexity if present
+    const complexityMatch = plan.match(/estimated complexity[:\s]*(simple|medium|complex)/i);
+    if (complexityMatch) {
+      summary += `- Complexity: ${complexityMatch[1]}\n`;
+    }
+    
+    return summary;
+  }
+
+  /**
+   * Create a brief summary of execution results
+   */
+  private summarizeExecution(output: string, filesChanged: string[]): string {
+    let summary = `✅ **Claude Code Execution Complete**\n`;
+    summary += `- Files changed: ${filesChanged.length}\n`;
+    
+    if (filesChanged.length > 0) {
+      summary += `- Modified:\n`;
+      for (const file of filesChanged.slice(0, 10)) {
+        summary += `  - ${file}\n`;
+      }
+      if (filesChanged.length > 10) {
+        summary += `  - ... and ${filesChanged.length - 10} more\n`;
+      }
+    }
+    
+    return summary;
   }
 }
 

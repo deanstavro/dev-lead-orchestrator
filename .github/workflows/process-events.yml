@@ -48,6 +48,22 @@ jobs:
         run: npm ci
         continue-on-error: true  # Some repos might not have npm
 
+      # Install Claude Code CLI for complex implementations
+      - name: Install Claude Code CLI
+        if: contains(fromJson('["agent_start", "agent_implement", "human_response"]'), github.event.action)
+        run: |
+          npm install -g @anthropic-ai/claude-code || echo "Claude Code CLI installation failed, will use basic tools"
+        continue-on-error: true  # Fall back to basic tools if installation fails
+
+      # Verify Claude Code installation
+      - name: Verify Claude Code CLI
+        if: contains(fromJson('["agent_start", "agent_implement", "human_response"]'), github.event.action)
+        run: |
+          claude --version || echo "Claude Code CLI not available, will use basic tools for implementation"
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
       - name: Process event
         env:
           EVENT_TYPE: ${{ github.event.action }}

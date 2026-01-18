@@ -2,9 +2,67 @@ import Anthropic from '@anthropic-ai/sdk';
 import { AgentContext, AgentResult, AgentName } from '../types/index.js';
 import { sessionService } from './session.js';
 import { ToolExecutor } from '../tools/executor.js';
-import { CODE_TOOLS } from '../tools/definitions.js';
+import { CODE_TOOLS, COMPLEXITY_THRESHOLDS } from '../tools/definitions.js';
 
 const anthropic = new Anthropic();
+
+// ============================================================================
+// COMPLEXITY ANALYSIS
+// ============================================================================
+
+interface ComplexityAnalysis {
+  score: number;
+  useClaudeCode: boolean;
+  reasons: string[];
+}
+
+/**
+ * Analyze task complexity to determine if we should use Claude Code CLI
+ */
+function analyzeTaskComplexity(plan: string, design: string): ComplexityAnalysis {
+  const reasons: string[] = [];
+  let score = 0;
+  const combined = `${plan} ${design}`.toLowerCase();
+
+  // Count file references
+  const fileMatches = combined.match(/\.(ts|tsx|js|jsx|css|json|md)/g) || [];
+  if (fileMatches.length > COMPLEXITY_THRESHOLDS.fileCountThreshold) {
+    score += 30;
+    reasons.push(`${fileMatches.length} files mentioned (threshold: ${COMPLEXITY_THRESHOLDS.fileCountThreshold})`);
+  }
+
+  // Check for complex keywords
+  for (const keyword of COMPLEXITY_THRESHOLDS.complexKeywords) {
+    if (combined.includes(keyword)) {
+      score += 15;
+      reasons.push(`Contains "${keyword}"`);
+    }
+  }
+
+  // Check for cross-cutting concerns
+  if (combined.includes('codebase') || combined.includes('project-wide')) {
+    score += 25;
+    reasons.push('Codebase-wide change');
+  }
+
+  // Check for architectural changes
+  if (combined.includes('architectural') || combined.includes('restructure') || combined.includes('redesign')) {
+    score += 20;
+    reasons.push('Architectural change');
+  }
+
+  // Check for migration patterns
+  if (combined.includes('from') && combined.includes('to') && (combined.includes('migrate') || combined.includes('convert'))) {
+    score += 20;
+    reasons.push('Migration pattern detected');
+  }
+
+  return {
+    score,
+    useClaudeCode: score >= COMPLEXITY_THRESHOLDS.scoreThreshold,
+    reasons,
+  };
+}
 
 // Agent system prompts
 const AGENT_PROMPTS: Record<AgentName, string> = {
@@ -184,7 +242,101 @@ async function runImplementerAgent(
   baseContext: string,
   repoPath: string
 ): Promise<AgentResult> {
+  const { session } = context;
   const executor = new ToolExecutor(repoPath);
+  
+  // Check if this is an "execute approved plan" call
+  const approvedPlan = session.metadata.approved_claude_code_plan as string | undefined;
+  const pendingPlan = session.metadata.pending_claude_code_plan as string | undefined;
+  
+  // If there's an approved plan, execute it with Claude Code
+  if (approvedPlan) {
+    console.log('[Implementer] Executing approved Claude Code plan...');
+    return await executeWithClaudeCode(executor, baseContext, approvedPlan);
+  }
+  
+  // Analyze complexity to decide implementation strategy
+  const plan = String(session.metadata.plan || '');
+  const design = String(session.metadata.design || '');
+  const complexity = analyzeTaskComplexity(plan, design);
+  
+  console.log(`[Implementer] Complexity analysis: score=${complexity.score}, useClaudeCode=${complexity.useClaudeCode}`);
+  if (complexity.reasons.length > 0) {
+    console.log(`[Implementer] Reasons: ${complexity.reasons.join(', ')}`);
+  }
+  
+  // For complex tasks, use Claude Code CLI (plan first, then approve)
+  if (complexity.useClaudeCode && !pendingPlan) {
+    console.log('[Implementer] Complex task detected, generating Claude Code plan for approval...');
+    
+    const planResult = await executor.runClaudeCodePlan(baseContext);
+    
+    if (!planResult.success) {
+      console.log('[Implementer] Claude Code not available, falling back to basic tools');
+      // Fall back to basic implementation
+      return await runBasicImplementer(executor, baseContext);
+    }
+    
+    // Return plan for human approval
+    return {
+      success: true,
+      output: planResult.plan || planResult.output,
+      needsHumanInput: true,
+      humanQuestion: `🤖 **Claude Code Plan**\n\nThis task is complex (score: ${complexity.score}/100). Claude Code has generated a plan:\n\n${planResult.plan}\n\n---\n\n**Please review and reply:**\n- "approve" - Execute this plan\n- "modify: [changes]" - Adjust the plan\n- "basic" - Use basic tools instead`,
+      data: { 
+        complexity,
+        pendingClaudeCodePlan: planResult.plan,
+        planSummary: planResult.summary,
+      },
+    };
+  }
+  
+  // For simple tasks, use basic tool-based implementation
+  console.log('[Implementer] Using basic tools for implementation');
+  return await runBasicImplementer(executor, baseContext);
+}
+
+/**
+ * Execute implementation using Claude Code CLI with approved plan
+ */
+async function executeWithClaudeCode(
+  executor: ToolExecutor,
+  taskContext: string,
+  approvedPlan: string
+): Promise<AgentResult> {
+  console.log('[Implementer] Running Claude Code with approved plan...');
+  
+  const result = await executor.runClaudeCodeExecute(taskContext, approvedPlan);
+  
+  if (!result.success) {
+    return {
+      success: false,
+      output: result.output,
+      needsHumanInput: true,
+      humanQuestion: `Claude Code execution failed:\n\n${result.error}\n\nHow should we proceed?`,
+      error: result.error,
+    };
+  }
+  
+  return {
+    success: true,
+    output: `${result.summary}\n\n${result.output}`,
+    needsHumanInput: false,
+    suggestedNextAgent: 'tester',
+    data: { 
+      changedFiles: result.filesChanged,
+      usedClaudeCode: true,
+    },
+  };
+}
+
+/**
+ * Basic tool-based implementation (original approach)
+ */
+async function runBasicImplementer(
+  executor: ToolExecutor,
+  baseContext: string
+): Promise<AgentResult> {
   const messages: Anthropic.MessageParam[] = [
     { role: 'user', content: `${baseContext}\n\nBegin implementation. Explore the codebase first, then make changes.` },
   ];
@@ -217,7 +369,7 @@ async function runImplementerAgent(
         output: `Implementation complete. Changed files: ${changedFiles.join(', ')}`,
         needsHumanInput: false,
         suggestedNextAgent: 'tester',
-        data: { changedFiles, iterations },
+        data: { changedFiles, iterations, usedClaudeCode: false },
       };
     }
 
@@ -274,7 +426,7 @@ async function runImplementerAgent(
     output: `Hit max iterations (${maxIterations})`,
     needsHumanInput: true,
     humanQuestion: 'Implementation reached max iterations. Review progress and advise.',
-    data: { changedFiles, iterations },
+    data: { changedFiles, iterations, usedClaudeCode: false },
   };
 }
 

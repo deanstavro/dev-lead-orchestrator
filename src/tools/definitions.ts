@@ -175,7 +175,26 @@ export const ALLOWED_COMMANDS = [
   'npx tsc --noEmit',
   'npx eslint',
   'npx prettier',
+  'claude', // Claude Code CLI
 ];
+
+// Complexity analysis configuration
+export const COMPLEXITY_THRESHOLDS = {
+  fileCountThreshold: 3,      // More than 3 files = complex
+  scoreThreshold: 40,         // Score >= 40 triggers Claude Code
+  complexKeywords: [
+    'refactor',
+    'migrate', 
+    'upgrade',
+    'across all',
+    'every file',
+    'all files',
+    'codebase-wide',
+    'project-wide',
+    'architectural',
+    'restructure',
+  ],
+};
 
 // Files/directories the agent should not modify
 export const PROTECTED_PATHS = [

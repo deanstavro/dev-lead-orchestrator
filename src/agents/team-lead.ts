@@ -226,7 +226,14 @@ export async function runTeamLead(context: AgentContext): Promise<TeamLeadResult
             if (agentName === 'scope') metadataUpdate.scope = agentResult.output;
             if (agentName === 'designer') metadataUpdate.design = agentResult.output;
             if (agentName === 'planner') metadataUpdate.plan = agentResult.output;
-            if (agentName === 'implementer') metadataUpdate.implementedFiles = agentResult.data.changedFiles;
+            if (agentName === 'implementer') {
+              metadataUpdate.implementedFiles = agentResult.data.changedFiles;
+              // Handle Claude Code plan pending approval
+              if (agentResult.data.pendingClaudeCodePlan) {
+                metadataUpdate.pending_claude_code_plan = agentResult.data.pendingClaudeCodePlan;
+                metadataUpdate.claude_code_complexity = agentResult.data.complexity;
+              }
+            }
             if (agentName === 'tester') metadataUpdate.testResults = agentResult.data.results;
             if (agentName === 'pr-creator') {
               metadataUpdate.prNumber = agentResult.data.prNumber;

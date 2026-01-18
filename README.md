@@ -66,18 +66,20 @@ Each agent gets up to **5-6 iterations** to explore before responding.
 
 ## Tool Access Matrix
 
-| Agent | read_file | list_dir | search | write_file | apply_diff | run_cmd | git |
-|-------|:---------:|:--------:|:------:|:----------:|:----------:|:-------:|:---:|
-| **Team Lead** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Clarifier** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Scope** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Designer** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Planner** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Implementer** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| **Tester** | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ |
-| **PR Creator** | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Agent | read_file | list_dir | search | write_file | apply_diff | run_cmd | Claude Code | git |
+|-------|:---------:|:--------:|:------:|:----------:|:----------:|:-------:|:-----------:|:---:|
+| **Team Lead** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Clarifier** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Scope** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Designer** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Planner** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Implementer** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅* | ❌ |
+| **Tester** | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| **PR Creator** | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | ✅ |
 
-**Key principle**: READ tools are available to all agents for context. WRITE tools are restricted to agents that need them.
+*Claude Code is used automatically for complex tasks (score ≥ 40) with human approval.
+
+**Key principle**: READ tools are available to all agents for context. WRITE tools are restricted to agents that need them. Claude Code is used for complex refactors with a plan-approve-execute flow.
 
 ---
 
@@ -129,8 +131,18 @@ Should the new auth flow use Server Actions or API routes?"
 
 ### 🔧 Implementer
 **Purpose**: Write actual code changes  
-**Tools**: Full read/write access + npm commands  
-**Loop**: Up to 30 iterations until task complete
+**Tools**: Full read/write access + npm commands + Claude Code CLI  
+**Loop**: Up to 100 iterations until task complete
+
+**Smart Routing**: Implementer analyzes task complexity and chooses the best approach:
+- **Simple tasks** (≤3 files): Uses basic tools (read/write/apply_diff)
+- **Complex tasks** (>3 files, refactors, migrations): Uses Claude Code CLI
+
+For complex tasks, a **plan-approve-execute** flow is used:
+1. Claude Code generates a detailed plan
+2. Plan is posted to GitHub for human approval
+3. Human replies: "approve", "modify: [changes]", or "basic"
+4. On approval, Claude Code executes the plan
 
 ### 🧪 Tester
 **Purpose**: Verify changes work  
@@ -155,6 +167,84 @@ The Team Lead orchestrates but doesn't modify code directly:
 | `think` | Record reasoning (shown in logs) |
 | `mark_complete` | Finish the ticket |
 | `mark_blocked` | Pause when stuck |
+
+---
+
+## Claude Code Integration
+
+For complex implementation tasks, Cherry Automation integrates with **Claude Code CLI** for more powerful codebase modifications.
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Implementer receives task                                                   │
+│            ↓                                                                │
+│  ┌─────────────────────────────────────┐                                   │
+│  │  Complexity Analysis                 │                                   │
+│  │  • Count files mentioned            │                                   │
+│  │  • Check for keywords: refactor,    │                                   │
+│  │    migrate, upgrade, etc.           │                                   │
+│  │  • Score: 0-100                     │                                   │
+│  └─────────────────────────────────────┘                                   │
+│            ↓                                                                │
+│  Score < 40: Basic tools          Score ≥ 40: Claude Code CLI              │
+│            │                                │                               │
+│            ↓                                ↓                               │
+│  Direct file edits              1. Generate plan                           │
+│  (read/write/apply_diff)        2. Post for approval                       │
+│                                 3. Human: "approve"                        │
+│                                 4. Execute with Claude Code                │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Complexity Indicators
+
+| Indicator | Score |
+|-----------|-------|
+| More than 3 files mentioned | +30 |
+| Contains "refactor", "migrate", "upgrade" | +15 each |
+| "Codebase-wide" or "project-wide" | +25 |
+| "Architectural" or "restructure" | +20 |
+| Migration pattern (from X to Y) | +20 |
+
+**Threshold**: Score ≥ 40 triggers Claude Code
+
+### Plan Approval Commands
+
+When Claude Code generates a plan, reply with:
+
+| Command | Effect |
+|---------|--------|
+| `approve` | Execute the plan with Claude Code |
+| `basic` | Use basic tools instead (skip Claude Code) |
+| `modify: [feedback]` | Adjust the plan based on feedback |
+
+### Example: Complex Refactoring
+
+```
+Issue: "Migrate all API calls from axios to native fetch"
+         ↓
+🔧 Implementer: "Complexity score: 65 (>40), using Claude Code"
+         ↓
+📋 Claude Code Plan:
+   "## Files to Modify
+    - src/api/client.ts: Replace axios instance
+    - src/api/users.ts: Update 12 functions
+    - src/api/products.ts: Update 8 functions
+    - src/hooks/useApi.ts: Update error handling
+    - package.json: Remove axios dependency
+    
+    ## Estimated Complexity: Medium"
+         ↓
+❓ "Please review and reply: approve / basic / modify: [changes]"
+         ↓
+👤 Human: "approve"
+         ↓
+✅ Claude Code executes plan, modifies 5 files
+         ↓
+🧪 Tester → 🚀 PR Creator
+```
 
 ---
 
@@ -311,11 +401,13 @@ Issue: "Add dark mode toggle to settings"
 | Limit | Value | Why |
 |-------|-------|-----|
 | Context iterations | 5-6 | Prevent endless exploration |
-| Implementer iterations | 30 | Complex changes need room |
+| Implementer iterations (basic) | 100 | Complex changes need room |
+| Claude Code timeout | 10 min | Large refactors need time |
 | Team Lead iterations | 25 | Prevent infinite loops |
 | Workflow timeout | 30 min | GitHub Actions limit |
+| Complexity threshold | 40 | Score to trigger Claude Code |
 | Protected files | `.env`, `.git`, `node_modules` | Security |
-| Command whitelist | `npm test/build/lint` | Safety |
+| Command whitelist | `npm test/build/lint`, `claude` | Safety |
 
 ---
 
@@ -334,8 +426,8 @@ Issue: "Add dark mode toggle to settings"
 ```
 
 ### 2. Chunked Execution for Big Changes
-**Current**: Single implementer loop (30 iterations max)  
-**Better**: Break into file-level tasks
+**Current**: Claude Code handles multi-file changes  
+**Better**: Break into file-level tasks for more control
 
 ```
 Planner creates:
@@ -352,24 +444,15 @@ Planner creates:
 Designer + Scope → Both read codebase simultaneously
 ```
 
-### 4. Claude Code Integration
-**Option**: Shell out to Claude Code CLI for complex tasks
-
-```typescript
-await executor.execute('run_command', { 
-  command: 'claude-code "refactor auth to use new API"' 
-});
-```
-
-### 5. Persistent Codebase Memory
+### 4. Persistent Codebase Memory
 **Current**: Each session starts fresh  
 **Better**: Remember project patterns, conventions, decisions
 
-### 6. Visual Diff Preview
+### 5. Visual Diff Preview
 **Before PR**: Show human a preview of all changes  
 **Human can**: Approve, request modifications, or rollback
 
-### 7. Learning from Feedback
+### 6. Learning from Feedback
 **Track**: Which PRs get approved vs rejected  
 **Improve**: Tune prompts based on what works
 
@@ -417,6 +500,15 @@ npm start
 - Comment telling Team Lead to skip tests
 - Tests are currently non-blocking (configurable)
 
+**Claude Code plan not generating?**
+- Check if Claude Code CLI is installed in workflow
+- Verify ANTHROPIC_API_KEY is set
+- Falls back to basic tools automatically
+
+**Want to skip Claude Code for a task?**
+- Reply "basic" when asked to approve the plan
+- Or set `use_basic_tools: true` in session metadata
+
 ---
 
 ## Architecture Decisions
@@ -426,6 +518,9 @@ npm start
 | All agents get read access | Context-aware responses beat generic advice |
 | Write tools limited | Prevent accidental modifications |
 | Team Lead doesn't code | Separation of concerns, focused agents |
+| Claude Code for complex tasks | Pre-indexed codebase, better multi-file changes |
+| Plan-approve-execute flow | Human oversight for major changes |
+| Complexity-based routing | Simple tasks stay fast, complex tasks get power |
 | GitHub Actions | Free, no cold starts, built-in secrets |
 | Supabase | Structured state, queryable history |
 | Anthropic Claude | Best tool use, follows instructions well |

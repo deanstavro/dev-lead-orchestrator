@@ -95,11 +95,54 @@ export async function handleTeamLeadHumanResponse(payload: EventPayload): Promis
     metadata: { author: comment_author, phase: 'team-lead' },
   });
 
-  // Update metadata with response
-  await sessionService.updateMetadata(session.id, {
+  // Check if this is a Claude Code plan approval
+  const pendingPlan = session.metadata.pending_claude_code_plan as string | undefined;
+  const lowerComment = comment_body.toLowerCase().trim();
+  
+  let metadataUpdate: Record<string, unknown> = {
     lastHumanResponse: comment_body,
     lastHumanResponseAt: new Date().toISOString(),
-  });
+  };
+
+  if (pendingPlan) {
+    if (lowerComment === 'approve' || lowerComment.startsWith('approve') || lowerComment.includes('approved')) {
+      // Human approved the Claude Code plan
+      console.log('[TeamLeadHandler] Claude Code plan approved');
+      metadataUpdate.approved_claude_code_plan = pendingPlan;
+      metadataUpdate.pending_claude_code_plan = null;
+      
+      await githubService.postComment(
+        source_repo,
+        issue_number,
+        `✅ **Plan approved!** Executing with Claude Code...`
+      );
+    } else if (lowerComment === 'basic' || lowerComment.includes('basic tools')) {
+      // Human wants to use basic tools instead
+      console.log('[TeamLeadHandler] Using basic tools instead of Claude Code');
+      metadataUpdate.pending_claude_code_plan = null;
+      metadataUpdate.use_basic_tools = true;
+      
+      await githubService.postComment(
+        source_repo,
+        issue_number,
+        `👍 **Got it!** Switching to basic tools for implementation...`
+      );
+    } else if (lowerComment.startsWith('modify:')) {
+      // Human wants to modify the plan
+      const modifications = comment_body.slice(7).trim();
+      console.log('[TeamLeadHandler] Plan modifications requested');
+      metadataUpdate.plan_modifications = modifications;
+      
+      await githubService.postComment(
+        source_repo,
+        issue_number,
+        `📝 **Noted!** I'll adjust the plan based on your feedback...`
+      );
+    }
+  }
+
+  // Update metadata with response and any plan approval changes
+  await sessionService.updateMetadata(session.id, metadataUpdate);
 
   // Ensure session is active
   if (session.status === 'paused') {
