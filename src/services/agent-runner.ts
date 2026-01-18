@@ -191,7 +191,7 @@ async function runImplementerAgent(
 
   const changedFiles: string[] = [];
   let iterations = 0;
-  const maxIterations = 30;
+  const maxIterations = 100;
 
   while (iterations < maxIterations) {
     iterations++;
