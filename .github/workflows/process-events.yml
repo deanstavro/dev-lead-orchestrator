@@ -4,17 +4,22 @@ on:
   repository_dispatch:
     types:
       - agent_start
+      - agent_start_pipeline
       - agent_stop
       - human_response
+      - agent_implement
+      - agent_test
+      - agent_create_pr
       - qa_review
       - post_merge_monitor
 
 jobs:
   process-event:
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # Team Lead can run longer
     
     steps:
-      - name: Checkout
+      - name: Checkout automation repo
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -26,6 +31,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Team Lead and implementation events need the source repo
+      - name: Checkout source repo
+        if: contains(fromJson('["agent_start", "agent_implement", "agent_test", "agent_create_pr", "human_response"]'), github.event.action)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.client_payload.source_repo }}
+          token: ${{ secrets.GH_PAT }}
+          path: source-repo
+          fetch-depth: 0  # Full history for PR creation
+
+      # Install source repo dependencies
+      - name: Install source repo dependencies
+        if: contains(fromJson('["agent_start", "agent_implement", "agent_test", "agent_create_pr", "human_response"]'), github.event.action)
+        working-directory: source-repo
+        run: npm ci
+        continue-on-error: true  # Some repos might not have npm
+
       - name: Process event
         env:
           EVENT_TYPE: ${{ github.event.action }}
@@ -34,4 +56,5 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          REPO_PATH: ./source-repo
         run: npm start

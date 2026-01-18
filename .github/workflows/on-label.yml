@@ -48,6 +48,25 @@ jobs:
               "sender": "${{ github.event.sender.login }}"
             }
 
+  handle-agent-implement:
+    if: github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'agent:implement'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger agent implement
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GH_PAT }}
+          repository: Cherry-Application/cherry-automation
+          event-type: agent_implement
+          client-payload: |
+            {
+              "action": "implement",
+              "source_repo": "${{ github.repository }}",
+              "issue_number": ${{ github.event.issue.number }},
+              "issue_title": ${{ toJson(github.event.issue.title) }},
+              "sender": "${{ github.event.sender.login }}"
+            }
+
   handle-human-response:
     if: |
       github.event_name == 'issue_comment' && 
@@ -60,7 +79,9 @@ jobs:
       !startsWith(github.event.comment.body, '✅') &&
       !startsWith(github.event.comment.body, '🎉') &&
       !startsWith(github.event.comment.body, '🛑') &&
-      !startsWith(github.event.comment.body, '🔍')
+      !startsWith(github.event.comment.body, '🔍') &&
+      !startsWith(github.event.comment.body, '🔧') &&
+      !startsWith(github.event.comment.body, '⚠️')
     runs-on: ubuntu-latest
     steps:
       - name: Check for agent label

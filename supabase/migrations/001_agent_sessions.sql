@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   repo TEXT NOT NULL,
   issue_number INTEGER NOT NULL,
-  current_phase TEXT NOT NULL CHECK (current_phase IN ('clarifying', 'scoping', 'designing', 'planning', 'completed')),
+  current_phase TEXT NOT NULL CHECK (current_phase IN ('clarifying', 'scoping', 'designing', 'planning', 'implementing', 'testing', 'completed')),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'completed', 'cancelled')),
   conversation JSONB NOT NULL DEFAULT '[]'::jsonb,
   metadata JSONB DEFAULT '{}'::jsonb,
