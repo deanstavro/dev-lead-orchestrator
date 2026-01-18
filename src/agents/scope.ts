@@ -1,9 +1,7 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { AgentContext, ConversationMessage } from '../types/index.js';
 import { sessionService } from '../services/session.js';
 import { githubService } from '../services/github.js';
-
-const anthropic = new Anthropic();
+import { runAgentWithContext } from './with-context.js';
 
 const SYSTEM_PROMPT = `You are a scoping agent defining the boundaries of software work.
 
@@ -16,6 +14,8 @@ Based on the clarified requirements, you need to:
 Guidelines:
 - Be specific and measurable in acceptance criteria
 - Use bullet points for clarity
+- Reference actual files and components from the codebase
+- Identify specific files that will need changes
 - If you need more info to scope properly, ask specific questions
 - When scope is clear, say "PHASE_COMPLETE" at the end
 
@@ -30,6 +30,9 @@ Output format when complete:
 ## Out of Scope
 - Item 1
 
+## Files to Modify
+- path/to/file.ts: what changes
+
 ## Dependencies
 - None / List them
 
@@ -40,20 +43,19 @@ PHASE_COMPLETE`;
 export async function runScope(context: AgentContext): Promise<void> {
   const { session, payload } = context;
   const { source_repo, issue_number } = payload;
+  const repoPath = process.env.REPO_PATH || process.cwd();
 
   if (!issue_number) throw new Error('Missing issue_number');
 
   console.log(`Running scope agent for ${source_repo}#${issue_number}`);
+  console.log(`[Scope] Using repo path: ${repoPath}`);
 
   // Build context from entire conversation
   const conversationSummary = session.conversation
     .map(m => `${m.role.toUpperCase()}: ${m.content}`)
     .join('\n\n');
 
-  const messages: { role: 'user' | 'assistant'; content: string }[] = [
-    {
-      role: 'user',
-      content: `Here's the ticket and clarification discussion so far:
+  const userMessage = `Here's the ticket and clarification discussion so far:
 
 Ticket: ${session.metadata.issue_title}
 ${session.metadata.issue_body}
@@ -63,31 +65,29 @@ Clarification Discussion:
 ${conversationSummary}
 
 ---
-Please define the scope for this work.`,
-    },
-  ];
+Please explore the codebase to understand the structure and existing code, then define the scope for this work.
+Be specific about which files and components will need changes.`;
 
   // Add any scoping-phase messages
   const scopeMessages = session.conversation.filter(
     m => m.metadata?.phase === 'scoping'
   );
-  for (const msg of scopeMessages) {
-    messages.push({
-      role: msg.role === 'user' ? 'user' : 'assistant',
-      content: msg.content,
-    });
+  
+  let fullMessage = userMessage;
+  if (scopeMessages.length > 0) {
+    fullMessage += '\n\n---\nPrevious scoping discussion:\n' + 
+      scopeMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
   }
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 1500,
-    system: SYSTEM_PROMPT,
-    messages,
+  const { response: responseText, toolsUsed, iterationCount } = await runAgentWithContext({
+    systemPrompt: SYSTEM_PROMPT,
+    userMessage: fullMessage,
+    repoPath,
+    maxIterations: 5,
+    maxTokens: 2000,
   });
 
-  const responseText = response.content[0].type === 'text'
-    ? response.content[0].text
-    : 'Unable to generate response';
+  console.log(`[Scope] Completed after ${iterationCount} iterations, used ${toolsUsed.length} tools`);
 
   const isComplete = responseText.includes('PHASE_COMPLETE');
   const cleanResponse = responseText.replace('PHASE_COMPLETE', '').trim();
@@ -96,7 +96,10 @@ Please define the scope for this work.`,
     role: 'assistant',
     content: cleanResponse,
     timestamp: new Date().toISOString(),
-    metadata: { phase: 'scoping' },
+    metadata: { 
+      phase: 'scoping',
+      toolsUsed: toolsUsed.length,
+    },
   };
   await sessionService.addMessage(session.id, assistantMessage);
 
@@ -123,4 +126,3 @@ Please define the scope for this work.`,
     );
   }
 }
-

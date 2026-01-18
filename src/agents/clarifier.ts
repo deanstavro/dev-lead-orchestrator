@@ -1,9 +1,7 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { AgentContext, ConversationMessage } from '../types/index.js';
 import { sessionService } from '../services/session.js';
 import { githubService } from '../services/github.js';
-
-const anthropic = new Anthropic();
+import { runAgentWithContext } from './with-context.js';
 
 const SYSTEM_PROMPT = `You are a clarifying agent helping to refine software development tickets.
 
@@ -17,6 +15,7 @@ Guidelines:
 - Ask 2-4 focused questions at a time, not more
 - Be concise and direct
 - Number your questions for easy reference
+- Reference specific files or patterns you found in the codebase when relevant
 - If you have enough clarity, say "PHASE_COMPLETE" at the end of your message
 - Don't ask about implementation details yet - that's for later phases
 
@@ -26,44 +25,37 @@ PHASE_COMPLETE`;
 export async function runClarifier(context: AgentContext): Promise<void> {
   const { session, payload } = context;
   const { source_repo, issue_number } = payload;
+  const repoPath = process.env.REPO_PATH || process.cwd();
 
   if (!issue_number) throw new Error('Missing issue_number');
 
   console.log(`Running clarifier for ${source_repo}#${issue_number}`);
+  console.log(`[Clarifier] Using repo path: ${repoPath}`);
 
-  // Build conversation history for Claude
-  const messages: { role: 'user' | 'assistant'; content: string }[] = [];
-
-  // Add initial context as first user message
-  const initialContext = `Ticket Title: ${session.metadata.issue_title || 'N/A'}
-  
-Ticket Description:
-${session.metadata.issue_body || 'No description provided'}`;
-
-  if (session.conversation.length === 0) {
-    messages.push({ role: 'user', content: initialContext });
-  } else {
-    // Add the initial context, then conversation history
-    messages.push({ role: 'user', content: initialContext });
-    
-    for (const msg of session.conversation) {
-      messages.push({
-        role: msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.content,
-      });
-    }
+  // Build conversation history
+  let conversationContext = '';
+  if (session.conversation.length > 0) {
+    conversationContext = '\n---\nPrevious discussion:\n' + 
+      session.conversation.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
   }
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 1024,
-    system: SYSTEM_PROMPT,
-    messages,
+  const userMessage = `Ticket Title: ${session.metadata.issue_title || 'N/A'}
+  
+Ticket Description:
+${session.metadata.issue_body || 'No description provided'}
+${conversationContext}
+
+Please explore the codebase to understand the project context, then ask clarifying questions about this ticket.`;
+
+  const { response: responseText, toolsUsed, iterationCount } = await runAgentWithContext({
+    systemPrompt: SYSTEM_PROMPT,
+    userMessage,
+    repoPath,
+    maxIterations: 5,
+    maxTokens: 1500,
   });
 
-  const responseText = response.content[0].type === 'text' 
-    ? response.content[0].text 
-    : 'Unable to generate response';
+  console.log(`[Clarifier] Completed after ${iterationCount} iterations, used ${toolsUsed.length} tools`);
 
   // Check if phase is complete
   const isComplete = responseText.includes('PHASE_COMPLETE');
@@ -74,7 +66,10 @@ ${session.metadata.issue_body || 'No description provided'}`;
     role: 'assistant',
     content: cleanResponse,
     timestamp: new Date().toISOString(),
-    metadata: { phase: 'clarifying' },
+    metadata: { 
+      phase: 'clarifying',
+      toolsUsed: toolsUsed.length,
+    },
   };
   await sessionService.addMessage(session.id, assistantMessage);
 
@@ -98,8 +93,7 @@ ${session.metadata.issue_body || 'No description provided'}`;
     await githubService.postComment(
       source_repo,
       issue_number,
-      `🤔 **Clarifying Questions**\n\n${cleanResponse}`
+      `🔍 **Clarifying Questions**\n\n${cleanResponse}`
     );
   }
 }
-

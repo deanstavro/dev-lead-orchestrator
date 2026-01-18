@@ -1,6 +1,60 @@
 import Anthropic from '@anthropic-ai/sdk';
 
-// Tool definitions for Claude
+// READ-ONLY tools for context-gathering agents (Clarifier, Scope, Designer, Planner)
+export const READ_ONLY_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'read_file',
+    description: 'Read the contents of a file to understand existing code, configs, or documentation.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        path: {
+          type: 'string',
+          description: 'File path relative to repository root (e.g., "src/components/Button.tsx", "package.json")',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'list_directory',
+    description: 'List files and directories to explore the codebase structure.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Directory path relative to repository root. Use "." for root.',
+        },
+        recursive: {
+          type: 'boolean',
+          description: 'If true, list all files recursively (default: false). Use sparingly on large directories.',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'search_code',
+    description: 'Search for text or patterns in the codebase. Use to find relevant files, components, or patterns.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pattern: {
+          type: 'string',
+          description: 'Text or regex pattern to search for (e.g., "useState", "export function", "TODO")',
+        },
+        file_glob: {
+          type: 'string',
+          description: 'Optional glob pattern to filter files (e.g., "*.ts", "*.tsx", "*.json")',
+        },
+      },
+      required: ['pattern'],
+    },
+  },
+];
+
+// Full tool definitions for Implementer (includes read + write + commands)
 export const CODE_TOOLS: Anthropic.Tool[] = [
   {
     name: 'read_file',

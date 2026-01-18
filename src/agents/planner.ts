@@ -1,9 +1,7 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { AgentContext, ConversationMessage } from '../types/index.js';
 import { sessionService } from '../services/session.js';
 import { githubService } from '../services/github.js';
-
-const anthropic = new Anthropic();
+import { runAgentWithContext } from './with-context.js';
 
 const SYSTEM_PROMPT = `You are a planning agent breaking work into implementation tasks.
 
@@ -11,11 +9,12 @@ Based on the scope and technical design, create a clear implementation plan:
 - Break work into small, independently testable tasks
 - Order tasks logically (dependencies first)
 - Estimate each task (in hours: 1, 2, 4, 8)
-- Identify which tasks could be parallelized
+- Include specific file paths and code locations
 
 Guidelines:
 - Each task should be completable in one sitting
-- Include testing as part of relevant tasks
+- Reference exact file paths from the codebase
+- Include line numbers or function names when helpful
 - Be specific about what each task delivers
 - Say "PHASE_COMPLETE" when plan is finalized
 
@@ -24,6 +23,8 @@ Output format:
 
 ### Phase 1: [Name]
 - [ ] **Task 1.1** (Xh): Description
+  - File: path/to/file.ts
+  - Changes: specific changes needed
 - [ ] **Task 1.2** (Xh): Description
 
 ### Phase 2: [Name]  
@@ -34,6 +35,9 @@ Output format:
 ## Parallelization Opportunities
 - Tasks X and Y can be done in parallel
 
+## Key Files to Review Before Starting
+- path/to/file.ts: why it's important
+
 ## Ready to Implement
 This ticket is now ready for development.
 
@@ -42,15 +46,14 @@ PHASE_COMPLETE`;
 export async function runPlanner(context: AgentContext): Promise<void> {
   const { session, payload } = context;
   const { source_repo, issue_number } = payload;
+  const repoPath = process.env.REPO_PATH || process.cwd();
 
   if (!issue_number) throw new Error('Missing issue_number');
 
   console.log(`Running planner agent for ${source_repo}#${issue_number}`);
+  console.log(`[Planner] Using repo path: ${repoPath}`);
 
-  const messages: { role: 'user' | 'assistant'; content: string }[] = [
-    {
-      role: 'user',
-      content: `Here's the ticket context:
+  const userMessage = `Here's the ticket context:
 
 Ticket: ${session.metadata.issue_title}
 ${session.metadata.issue_body}
@@ -64,31 +67,29 @@ Design:
 ${session.metadata.design || 'No design defined'}
 
 ---
-Please create an implementation plan.`,
-    },
-  ];
+Please explore the codebase to verify file paths and understand the code structure, then create a detailed implementation plan.
+Include specific file paths and be precise about what needs to change.`;
 
   // Add any planning-phase messages
   const planMessages = session.conversation.filter(
     m => m.metadata?.phase === 'planning'
   );
-  for (const msg of planMessages) {
-    messages.push({
-      role: msg.role === 'user' ? 'user' : 'assistant',
-      content: msg.content,
-    });
+  
+  let fullMessage = userMessage;
+  if (planMessages.length > 0) {
+    fullMessage += '\n\n---\nPrevious planning discussion:\n' + 
+      planMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
   }
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 2000,
-    system: SYSTEM_PROMPT,
-    messages,
+  const { response: responseText, toolsUsed, iterationCount } = await runAgentWithContext({
+    systemPrompt: SYSTEM_PROMPT,
+    userMessage: fullMessage,
+    repoPath,
+    maxIterations: 6,  // Planner needs to verify file locations
+    maxTokens: 2500,
   });
 
-  const responseText = response.content[0].type === 'text'
-    ? response.content[0].text
-    : 'Unable to generate response';
+  console.log(`[Planner] Completed after ${iterationCount} iterations, used ${toolsUsed.length} tools`);
 
   const isComplete = responseText.includes('PHASE_COMPLETE');
   const cleanResponse = responseText.replace('PHASE_COMPLETE', '').trim();
@@ -97,7 +98,10 @@ Please create an implementation plan.`,
     role: 'assistant',
     content: cleanResponse,
     timestamp: new Date().toISOString(),
-    metadata: { phase: 'planning' },
+    metadata: { 
+      phase: 'planning',
+      toolsUsed: toolsUsed.length,
+    },
   };
   await sessionService.addMessage(session.id, assistantMessage);
 
@@ -122,4 +126,3 @@ Please create an implementation plan.`,
     );
   }
 }
-

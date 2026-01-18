@@ -16,31 +16,152 @@ AI-powered Team Lead agent that autonomously takes GitHub issues from creation t
           ▼           ▼           ▼           ▼           ▼
     ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
     │Clarifier │ │  Scope   │ │ Designer │ │Implementer│ │ Tester   │
+    │  📖 R    │ │  📖 R    │ │  📖 R    │ │  📖 RW   │ │  📖 R+C  │
     └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘
                                                               │
                                                               ▼
                                                         ┌──────────┐
                                                         │PR Creator│
+                                                        │  📖 RW+G │
                                                         └──────────┘
+
+Legend: R = Read codebase  |  RW = Read/Write files  |  C = Commands  |  G = Git
 ```
 
 1. Add `agent:start` label to an issue
 2. **Team Lead** analyzes the ticket and decides what to do
-3. Delegates to specialist agents as needed (can skip phases, loop back)
+3. Delegates to specialist agents (all have codebase context!)
 4. Continues until PR is created or blocked
 5. Posts updates as GitHub comments throughout
+
+---
+
+## Context-Aware Agents
+
+**All agents can now explore the codebase before responding.** This means:
+
+| Before | After |
+|--------|-------|
+| "What framework are you using?" | *reads package.json* "I see you're using Next.js 14 with shadcn/ui..." |
+| "Create a new component" | *searches existing* "I'll follow the pattern in `src/components/ui/Button.tsx`..." |
+| "Estimated 8 hours" | *analyzes actual code* "This touches 3 files, ~2h realistic estimate" |
+
+### How Context Gathering Works
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  Agent receives task                                           │
+│            ↓                                                   │
+│  list_directory(".")  →  Understand project structure          │
+│  read_file("package.json")  →  See dependencies, scripts       │
+│  search_code("Button")  →  Find existing patterns              │
+│            ↓                                                   │
+│  Agent responds with SPECIFIC, ACCURATE information            │
+└────────────────────────────────────────────────────────────────┘
+```
+
+Each agent gets up to **5-6 iterations** to explore before responding.
+
+---
+
+## Tool Access Matrix
+
+| Agent | read_file | list_dir | search | write_file | apply_diff | run_cmd | git |
+|-------|:---------:|:--------:|:------:|:----------:|:----------:|:-------:|:---:|
+| **Team Lead** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Clarifier** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Scope** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Designer** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Planner** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Implementer** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **Tester** | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ |
+| **PR Creator** | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ |
+
+**Key principle**: READ tools are available to all agents for context. WRITE tools are restricted to agents that need them.
+
+---
+
+## Specialist Agents
+
+### 🔍 Clarifier
+**Purpose**: Ask questions to understand requirements  
+**Tools**: Read-only codebase access  
+**Output**: Numbered questions, "PHASE_COMPLETE" when done
+
+```
+"I see your project uses Next.js App Router with TypeScript. 
+Should the new auth flow use Server Actions or API routes?"
+```
+
+### 📋 Scope
+**Purpose**: Define acceptance criteria & boundaries  
+**Tools**: Read-only codebase access  
+**Output**: Acceptance criteria, in/out of scope, files to modify, complexity estimate
+
+```
+## Files to Modify
+- src/app/settings/page.tsx: Add dark mode toggle
+- src/lib/theme.ts: Create theme context
+```
+
+### 🏗️ Designer
+**Purpose**: Technical approach & architecture  
+**Tools**: Read-only codebase access  
+**Output**: Technical approach, components to modify, patterns to follow
+
+```
+## Existing Patterns to Follow
+- Pattern from src/hooks/useAuth.ts: Use Zustand for state management
+- Pattern from src/components/ui/: Follow shadcn/ui conventions
+```
+
+### 📝 Planner
+**Purpose**: Break into implementation tasks  
+**Tools**: Read-only codebase access  
+**Output**: Task list with file paths, line numbers, estimates
+
+```
+### Phase 1: Theme Foundation
+- [ ] **Task 1.1** (1h): Create theme context
+  - File: src/lib/theme.ts (new)
+  - Changes: Export useTheme hook following useAuth pattern
+```
+
+### 🔧 Implementer
+**Purpose**: Write actual code changes  
+**Tools**: Full read/write access + npm commands  
+**Loop**: Up to 30 iterations until task complete
+
+### 🧪 Tester
+**Purpose**: Verify changes work  
+**Tools**: Read access + npm commands  
+**Runs**: Type check, lint, build, tests (skips if scripts don't exist)
+
+### 🚀 PR Creator
+**Purpose**: Create branch, commit, push, open PR  
+**Tools**: Read access + git commands  
+**Output**: PR URL with description
+
+---
+
+## Team Lead Tools
+
+The Team Lead orchestrates but doesn't modify code directly:
+
+| Tool | Purpose |
+|------|---------|
+| `delegate_to_agent` | Run a specialist agent |
+| `ask_human` | Post a question and wait |
+| `think` | Record reasoning (shown in logs) |
+| `mark_complete` | Finish the ticket |
+| `mark_blocked` | Pause when stuck |
 
 ---
 
 ## Team Lead vs Pipeline Mode
 
 ### Team Lead Mode (Default)
-The Team Lead is an orchestrating agent that:
-- **Thinks** about what the ticket needs
-- **Delegates** to specialist agents dynamically
-- **Evaluates** outputs and decides next steps
-- **Adapts** - skips unnecessary phases, loops back if needed
-
+The Team Lead adapts to each ticket:
 ```
 Simple bug fix:    Clarifier → Implementer → Tester → PR (skips scope/design)
 Complex feature:   Clarifier → Scope → Designer → Planner → Implementer → Tester → PR
@@ -48,11 +169,10 @@ Unclear ticket:    Clarifier → (ask human) → Clarifier → Scope → ...
 ```
 
 ### Pipeline Mode (Legacy)
-Fixed sequential phases, triggered by labels:
+Fixed sequential phases via labels:
 ```
 agent:start → agent:implement → agent:test → agent:pr
 ```
-
 Use `agent_start_pipeline` event type for legacy mode.
 
 ---
@@ -65,12 +185,13 @@ src/
 ├── orchestrator.ts          # Routes events to handlers
 │
 ├── agents/
-│   ├── team-lead.ts         # 🧠 Orchestrating agent with tools
-│   ├── clarifier.ts         # Asks clarifying questions
-│   ├── scope.ts             # Defines acceptance criteria
-│   ├── designer.ts          # Technical approach
-│   ├── planner.ts           # Implementation tasks
-│   ├── implementer.ts       # Writes code (uses tools)
+│   ├── team-lead.ts         # 🧠 Orchestrating agent with delegation tools
+│   ├── with-context.ts      # 🔧 Context-gathering helper (READ-ONLY tools)
+│   ├── clarifier.ts         # Asks clarifying questions (w/ codebase context)
+│   ├── scope.ts             # Defines acceptance criteria (w/ codebase context)
+│   ├── designer.ts          # Technical approach (w/ codebase context)
+│   ├── planner.ts           # Implementation tasks (w/ codebase context)
+│   ├── implementer.ts       # Writes code (full tools)
 │   ├── tester.ts            # Runs tests
 │   └── pr-creator.ts        # Opens pull request
 │
@@ -78,7 +199,9 @@ src/
 │   ├── team-lead.ts         # Handles agent:start for Team Lead
 │   ├── agent-start.ts       # Legacy pipeline start
 │   ├── human-response.ts    # Processes human comments
-│   └── ...
+│   ├── implement.ts         # Direct implement handler
+│   ├── test.ts              # Direct test handler
+│   └── create-pr.ts         # Direct PR handler
 │
 ├── services/
 │   ├── agent-runner.ts      # Runs any agent, returns structured result
@@ -86,7 +209,7 @@ src/
 │   └── github.ts            # GitHub API
 │
 ├── tools/
-│   ├── definitions.ts       # Tool schemas for Claude
+│   ├── definitions.ts       # Tool schemas (READ_ONLY_TOOLS + CODE_TOOLS)
 │   └── executor.ts          # Executes tools safely
 │
 └── types/
@@ -95,60 +218,11 @@ src/
 
 ---
 
-## Team Lead Tools
-
-The Team Lead has these tools to manage the workflow:
-
-| Tool | Purpose |
-|------|---------|
-| `delegate_to_agent` | Run a specialist agent (clarifier, scope, designer, etc.) |
-| `ask_human` | Post a question and wait for human response |
-| `think` | Record reasoning (for debugging/transparency) |
-| `mark_complete` | Finish the ticket |
-| `mark_blocked` | Pause when stuck |
-
----
-
-## Specialist Agents
-
-| Agent | Purpose | Has Tools? |
-|-------|---------|------------|
-| **Clarifier** | Ask questions to understand requirements | No |
-| **Scope** | Define acceptance criteria & boundaries | No |
-| **Designer** | Technical approach & architecture | No |
-| **Planner** | Break into implementation tasks | No |
-| **Implementer** | Write code changes | Yes (file tools) |
-| **Tester** | Run tests, verify build | Yes (run commands) |
-| **PR Creator** | Create branch, commit, open PR | Yes (git commands) |
-
----
-
-## Implementer Tools
-
-The Implementer agent can use these tools to modify code:
-
-| Tool | Purpose |
-|------|---------|
-| `read_file` | Read file contents |
-| `write_file` | Create/overwrite files |
-| `apply_diff` | Make targeted edits |
-| `list_directory` | Explore codebase |
-| `search_code` | Find patterns |
-| `run_command` | Run npm scripts (whitelisted) |
-
-### Safety Guards
-- Protected paths: `.env`, `.git`, `node_modules`, `.github/workflows`
-- Whitelisted commands only: `npm test`, `npm build`, etc.
-- Output truncated to prevent token explosion
-- Max iterations limit
-
----
-
 ## Setup
 
 ### 1. Database
 
-Run the migration in Supabase:
+Run in Supabase SQL Editor:
 
 ```sql
 CREATE TABLE IF NOT EXISTS agent_sessions (
@@ -159,6 +233,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   status TEXT NOT NULL DEFAULT 'active',
   conversation JSONB NOT NULL DEFAULT '[]'::jsonb,
   metadata JSONB DEFAULT '{}'::jsonb,
+  team_lead_state JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(repo, issue_number)
@@ -171,7 +246,7 @@ Add to **cherry-automation** repo:
 
 | Secret | Description |
 |--------|-------------|
-| `GH_PAT` | GitHub PAT with `repo` scope |
+| `GH_PAT` | GitHub PAT with `repo` scope (access to both repos) |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key |
@@ -190,26 +265,6 @@ Create in your source repo:
 
 ---
 
-## Usage
-
-### Automatic (Team Lead)
-
-1. Create an issue with clear description
-2. Add `agent:start` label
-3. Team Lead takes over:
-   - Posts status updates
-   - Asks questions if needed (reply to continue)
-   - Implements, tests, creates PR
-4. Review and merge the PR
-
-### Manual Override
-
-If you want to manually trigger specific phases:
-- `agent:implement` - Run implementer only
-- `agent:test` - Run tests only
-
----
-
 ## Example Flow
 
 ```
@@ -217,50 +272,106 @@ Issue: "Add dark mode toggle to settings"
          ↓
 🤖 Team Lead: "Analyzing ticket... delegating to Clarifier"
          ↓
-🔍 Clarifier: "Questions: 1) System-wide or per-page? 2) OS preference?"
+🔍 Clarifier: *reads package.json, explores src/*
+   "You're using Next.js 14 with Tailwind. Questions:
+    1) Should dark mode follow OS preference?
+    2) Store in localStorage or cookies?"
          ↓
-👤 Human: "System-wide, respect OS preference"
+👤 Human: "OS preference, localStorage is fine"
          ↓
-🤖 Team Lead: "Got it, skipping Scope (simple feature), going to Designer"
+📋 Scope: *searches for theme, reads existing components*
+   "## Files to Modify
+    - src/app/layout.tsx: Add ThemeProvider
+    - src/app/settings/page.tsx: Add toggle
+    ## Complexity: M"
          ↓
-🏗️ Designer: "Use CSS variables with data-theme attribute..."
+🏗️ Designer: *reads similar hooks*
+   "## Existing Patterns to Follow
+    - Hook pattern from src/hooks/useLocalStorage.ts"
          ↓
-🤖 Team Lead: "Design looks good, delegating to Planner"
+📝 Planner: *verifies file paths exist*
+   "Tasks:
+    1. Create src/hooks/useTheme.ts
+    2. Update src/app/layout.tsx (line 15)
+    3. Add toggle to settings page"
          ↓
-📝 Planner: "Tasks: 1) Add CSS vars 2) Create toggle 3) Add to settings"
+🔧 Implementer: [reads → writes → tests in loop]
          ↓
-🤖 Team Lead: "Plan ready, starting Implementation"
+🧪 Tester: "✅ Type check passed"
          ↓
-🔧 Implementer: [reads files, makes changes, runs tests]
-         ↓
-🧪 Tester: "✅ All tests pass"
-         ↓
-🚀 PR Creator: "PR #123 created: github.com/..."
+🚀 PR Creator: "PR #123 created"
          ↓
 🎉 Team Lead: "Done! PR ready for review"
 ```
 
 ---
 
-## Architecture Decisions
+## Limits & Safety
 
-- **Team Lead over fixed pipeline**: Adaptive behavior, can skip/loop phases
-- **Specialist agents**: Focused prompts are easier to tune
-- **GitHub Actions**: Free, no cold starts, built-in secrets
-- **Supabase**: Structured state, queryable history
-- **Tool-based implementation**: Safe, controlled code modifications
+| Limit | Value | Why |
+|-------|-------|-----|
+| Context iterations | 5-6 | Prevent endless exploration |
+| Implementer iterations | 30 | Complex changes need room |
+| Team Lead iterations | 25 | Prevent infinite loops |
+| Workflow timeout | 30 min | GitHub Actions limit |
+| Protected files | `.env`, `.git`, `node_modules` | Security |
+| Command whitelist | `npm test/build/lint` | Safety |
 
 ---
 
-## Limits & Safety
+## Potential Improvements
 
-| Limit | Value |
-|-------|-------|
-| Team Lead iterations | 25 |
-| Implementer iterations | 30 |
-| Workflow timeout | 30 min |
-| Protected files | `.env`, `.git`, `node_modules` |
-| Allowed commands | `npm test`, `npm build`, etc. |
+### 1. Codebase Indexing
+**Current**: Agents explore on each run  
+**Better**: Pre-index with embeddings, semantic search
+
+```
+┌─────────────────────────────────────────┐
+│  On repo change → Index files           │
+│  On agent run → Query vector DB         │
+│  Result → Instant relevant context      │
+└─────────────────────────────────────────┘
+```
+
+### 2. Chunked Execution for Big Changes
+**Current**: Single implementer loop (30 iterations max)  
+**Better**: Break into file-level tasks
+
+```
+Planner creates:
+  - Task 1: Update src/auth.ts (isolated implementer run)
+  - Task 2: Update src/api.ts (isolated implementer run)
+  - Task 3: Update src/hooks.ts (isolated implementer run)
+```
+
+### 3. Parallel Agent Execution
+**Current**: Sequential delegation  
+**Better**: Run independent agents in parallel
+
+```
+Designer + Scope → Both read codebase simultaneously
+```
+
+### 4. Claude Code Integration
+**Option**: Shell out to Claude Code CLI for complex tasks
+
+```typescript
+await executor.execute('run_command', { 
+  command: 'claude-code "refactor auth to use new API"' 
+});
+```
+
+### 5. Persistent Codebase Memory
+**Current**: Each session starts fresh  
+**Better**: Remember project patterns, conventions, decisions
+
+### 6. Visual Diff Preview
+**Before PR**: Show human a preview of all changes  
+**Human can**: Approve, request modifications, or rollback
+
+### 7. Learning from Feedback
+**Track**: Which PRs get approved vs rejected  
+**Improve**: Tune prompts based on what works
 
 ---
 
@@ -272,7 +383,10 @@ npm run type-check
 npm run build
 
 # Run locally (requires env vars)
-EVENT_TYPE=agent_start EVENT_PAYLOAD='{"source_repo":"...","issue_number":1}' npm start
+EVENT_TYPE=agent_start \
+EVENT_PAYLOAD='{"source_repo":"org/repo","issue_number":1}' \
+REPO_PATH="/path/to/source/repo" \
+npm start
 ```
 
 ---
@@ -281,16 +395,37 @@ EVENT_TYPE=agent_start EVENT_PAYLOAD='{"source_repo":"...","issue_number":1}' np
 
 **Team Lead keeps looping?**
 - Check max iterations (25 by default)
-- Review the reasoning in GitHub comments
+- Review reasoning in GitHub comments
+- Human can comment to guide direction
+
+**Agents giving generic advice?**
+- Check `REPO_PATH` is set correctly
+- Verify repo was checked out in workflow
+- Look for tool errors in logs
 
 **Implementer can't find files?**
-- Make sure `REPO_PATH` is set correctly
-- Check if repo uses npm (some use yarn/pnpm)
+- Paths are relative to repo root
+- Check for typos in file paths
+- Use `list_directory` to explore
 
 **PR creation fails?**
 - Ensure `GH_PAT` has write access to source repo
 - Check if branch already exists
+- Verify git user is configured
 
-**Tests fail?**
-- Implementer may need to retry
-- Human can provide guidance via comment
+**Tests fail but you want to proceed?**
+- Comment telling Team Lead to skip tests
+- Tests are currently non-blocking (configurable)
+
+---
+
+## Architecture Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| All agents get read access | Context-aware responses beat generic advice |
+| Write tools limited | Prevent accidental modifications |
+| Team Lead doesn't code | Separation of concerns, focused agents |
+| GitHub Actions | Free, no cold starts, built-in secrets |
+| Supabase | Structured state, queryable history |
+| Anthropic Claude | Best tool use, follows instructions well |

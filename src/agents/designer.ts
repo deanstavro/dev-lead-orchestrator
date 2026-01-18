@@ -1,9 +1,7 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { AgentContext, ConversationMessage } from '../types/index.js';
 import { sessionService } from '../services/session.js';
 import { githubService } from '../services/github.js';
-
-const anthropic = new Anthropic();
+import { runAgentWithContext } from './with-context.js';
 
 const SYSTEM_PROMPT = `You are a design agent creating technical solutions for software work.
 
@@ -16,7 +14,8 @@ Based on the clarified requirements and defined scope, you need to:
 Guidelines:
 - Keep it high-level but specific enough to guide implementation
 - Focus on the "what" and "why", not detailed "how"
-- Mention relevant patterns or libraries if applicable
+- Reference actual code patterns you find in the codebase
+- Match existing coding styles and conventions
 - If you need clarification on technical constraints, ask
 - When design is clear, say "PHASE_COMPLETE" at the end
 
@@ -31,6 +30,9 @@ Brief description of the solution
 ## New Components (if any)
 - New component: purpose
 
+## Existing Patterns to Follow
+- Pattern from existing code: where found
+
 ## Architectural Decisions
 - Decision 1: rationale
 
@@ -42,15 +44,14 @@ PHASE_COMPLETE`;
 export async function runDesigner(context: AgentContext): Promise<void> {
   const { session, payload } = context;
   const { source_repo, issue_number } = payload;
+  const repoPath = process.env.REPO_PATH || process.cwd();
 
   if (!issue_number) throw new Error('Missing issue_number');
 
   console.log(`Running designer agent for ${source_repo}#${issue_number}`);
+  console.log(`[Designer] Using repo path: ${repoPath}`);
 
-  const messages: { role: 'user' | 'assistant'; content: string }[] = [
-    {
-      role: 'user',
-      content: `Here's the ticket context:
+  const userMessage = `Here's the ticket context:
 
 Ticket: ${session.metadata.issue_title}
 ${session.metadata.issue_body}
@@ -60,31 +61,29 @@ Scope:
 ${session.metadata.scope || 'No scope defined'}
 
 ---
-Please design the technical solution.`,
-    },
-  ];
+Please explore the codebase to understand existing patterns and architecture, then design the technical solution.
+Reference specific files and patterns you find.`;
 
   // Add any design-phase messages
   const designMessages = session.conversation.filter(
     m => m.metadata?.phase === 'designing'
   );
-  for (const msg of designMessages) {
-    messages.push({
-      role: msg.role === 'user' ? 'user' : 'assistant',
-      content: msg.content,
-    });
+  
+  let fullMessage = userMessage;
+  if (designMessages.length > 0) {
+    fullMessage += '\n\n---\nPrevious design discussion:\n' + 
+      designMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
   }
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 2000,
-    system: SYSTEM_PROMPT,
-    messages,
+  const { response: responseText, toolsUsed, iterationCount } = await runAgentWithContext({
+    systemPrompt: SYSTEM_PROMPT,
+    userMessage: fullMessage,
+    repoPath,
+    maxIterations: 6,  // Designer may need more exploration
+    maxTokens: 2500,
   });
 
-  const responseText = response.content[0].type === 'text'
-    ? response.content[0].text
-    : 'Unable to generate response';
+  console.log(`[Designer] Completed after ${iterationCount} iterations, used ${toolsUsed.length} tools`);
 
   const isComplete = responseText.includes('PHASE_COMPLETE');
   const cleanResponse = responseText.replace('PHASE_COMPLETE', '').trim();
@@ -93,7 +92,10 @@ Please design the technical solution.`,
     role: 'assistant',
     content: cleanResponse,
     timestamp: new Date().toISOString(),
-    metadata: { phase: 'designing' },
+    metadata: { 
+      phase: 'designing',
+      toolsUsed: toolsUsed.length,
+    },
   };
   await sessionService.addMessage(session.id, assistantMessage);
 
@@ -120,4 +122,3 @@ Please design the technical solution.`,
     );
   }
 }
-
