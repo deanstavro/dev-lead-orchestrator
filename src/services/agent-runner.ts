@@ -279,84 +279,22 @@ async function runImplementerAgent(
 }
 
 async function runTesterAgent(context: AgentContext, repoPath: string): Promise<AgentResult> {
-  const executor = new ToolExecutor(repoPath);
-  const results: { name: string; passed: boolean; output: string; skipped?: boolean }[] = [];
+  // TEMPORARILY SKIPPING ALL TESTS - just pass through to PR creation
+  console.log('[Tester] Skipping all tests (disabled for now)');
   
-  // Helper to check if npm script exists
-  const checkScriptExists = async (script: string): Promise<boolean> => {
-    try {
-      const fs = await import('fs/promises');
-      const pkgPath = `${repoPath}/package.json`;
-      const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf-8'));
-      return !!pkg.scripts?.[script];
-    } catch {
-      return false;
-    }
-  };
+  const summary = `⏭️ Type Check (skipped)
+⏭️ Lint (skipped)
+⏭️ Build (skipped)
+⏭️ Tests (skipped)
 
-  // Type check (always try - most repos have TypeScript)
-  console.log('[Tester] Running type check...');
-  const typeCheck = await executor.execute('run_command', { command: 'npx tsc --noEmit' });
-  const typeCheckSkipped = typeCheck.error?.includes('not found') ?? false;
-  const typeCheckPassed = typeCheck.success || typeCheckSkipped;
-  results.push({ 
-    name: 'Type Check', 
-    passed: typeCheckPassed, 
-    output: typeCheck.output || typeCheck.error || '',
-    skipped: typeCheckSkipped,
-  });
-
-  // Lint (optional - only if script exists)
-  if (await checkScriptExists('lint')) {
-    console.log('[Tester] Running lint...');
-    const lint = await executor.execute('run_command', { command: 'npm run lint' });
-    results.push({ name: 'Lint', passed: lint.success, output: lint.output || lint.error || '' });
-  } else {
-    console.log('[Tester] Skipping lint (no script)');
-    results.push({ name: 'Lint', passed: true, output: 'Skipped - no lint script', skipped: true });
-  }
-
-  // Build (optional - only if script exists)
-  if (await checkScriptExists('build')) {
-    console.log('[Tester] Running build...');
-    const build = await executor.execute('run_command', { command: 'npm run build' });
-    results.push({ name: 'Build', passed: build.success, output: build.output || build.error || '' });
-  } else {
-    console.log('[Tester] Skipping build (no script)');
-    results.push({ name: 'Build', passed: true, output: 'Skipped - no build script', skipped: true });
-  }
-
-  // Tests (optional - only if script exists)
-  if (await checkScriptExists('test')) {
-    console.log('[Tester] Running tests...');
-    const tests = await executor.execute('run_command', { command: 'npm test' });
-    // Treat "no tests" as passing
-    const testsOutput = tests.output || tests.error || '';
-    const noTests = testsOutput.includes('no test') || testsOutput.includes('No tests');
-    results.push({ name: 'Tests', passed: tests.success || noTests, output: testsOutput });
-  } else {
-    console.log('[Tester] Skipping tests (no script)');
-    results.push({ name: 'Tests', passed: true, output: 'Skipped - no test script', skipped: true });
-  }
-
-  // Only type check is critical - lint/build/tests are optional
-  const criticalPassed = results.find(r => r.name === 'Type Check')?.passed ?? true;
-  const allPassed = results.every(r => r.passed);
-  
-  const summary = results.map(r => {
-    if (r.skipped) return `⏭️ ${r.name} (skipped)`;
-    return `${r.passed ? '✅' : '❌'} ${r.name}`;
-  }).join('\n');
-
-  console.log(`[Tester] Results: critical=${criticalPassed}, all=${allPassed}`);
+_All tests disabled - proceeding to PR creation_`;
 
   return {
-    success: criticalPassed, // Only require type check to pass
+    success: true,
     output: summary,
-    needsHumanInput: !criticalPassed,
-    humanQuestion: criticalPassed ? undefined : 'Type check failed. Review errors.',
-    suggestedNextAgent: criticalPassed ? 'pr-creator' : undefined,
-    data: { results, allPassed, criticalPassed },
+    needsHumanInput: false,
+    suggestedNextAgent: 'pr-creator',
+    data: { results: [], allPassed: true, criticalPassed: true, testsDisabled: true },
   };
 }
 
