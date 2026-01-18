@@ -1,227 +1,103 @@
 name: AI Agent Orchestrator
 
 on:
-  # Trigger when label is added to an issue
-  issues:
-    types: [labeled, unlabeled]
+  # Receive events from other repos via repository_dispatch
+  repository_dispatch:
+    types: 
+      - agent_start
+      - agent_stop
+      - human_response
+      - qa_review
+      - post_merge_monitor
   
-  # Trigger when comment is added to an issue
-  issue_comment:
-    types: [created]
-  
-  # Trigger when PR is created/updated (for QA review)
-  pull_request:
-    types: [opened, synchronize, ready_for_review]
+  # Scheduled events (runs in this repo)
+  schedule:
+    # Every Friday at 9 AM UTC
+    - cron: '0 9 * * 5'
   
   # Allow manual trigger for testing
   workflow_dispatch:
     inputs:
-      issue_number:
-        description: 'Issue number to process'
+      action:
+        description: 'Action to perform'
         required: true
+        type: choice
+        options:
+          - start_processing
+          - refactor_scan
+          - test_connection
+      issue_number:
+        description: 'Issue number (optional)'
+        required: false
         type: number
+      repository:
+        description: 'Repository (e.g., Cherry-Application/cherry-frontend)'
+        required: false
+        type: string
 
 jobs:
   # ============================================
-  # JOB 1: Start Agent Processing
+  # JOB 1: Route to Vercel Agents
   # ============================================
-  start-agent-processing:
-    name: Start Agent Processing
+  route-to-agents:
+    name: Route to Agents
     runs-on: ubuntu-latest
-    # Only run when "agents:start" label is added
-    if: |
-      github.event_name == 'issues' && 
-      github.event.action == 'labeled' && 
-      github.event.label.name == 'agents:start'
+    if: github.event_name == 'repository_dispatch'
     
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Extract event data
+        id: extract
+        run: |
+          echo "Event type: ${{ github.event.action }}"
+          echo "Payload: ${{ toJSON(github.event.client_payload) }}"
       
-      - name: Send webhook to Vercel
+      - name: Forward to Vercel
         env:
           VERCEL_WEBHOOK_URL: ${{ secrets.VERCEL_WEBHOOK_URL }}
         run: |
-          curl -X POST "$VERCEL_WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "action": "start_processing",
-              "issue_number": ${{ github.event.issue.number }},
-              "issue_title": "${{ github.event.issue.title }}",
-              "issue_body": ${{ toJSON(github.event.issue.body) }},
-              "repository": "${{ github.repository }}",
-              "sender": "${{ github.event.sender.login }}"
-            }'
-
-  # ============================================
-  # JOB 2: Handle Agent Pause/Stop
-  # ============================================
-  stop-agent-processing:
-    name: Stop Agent Processing
-    runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'issues' && 
-      github.event.action == 'unlabeled' && 
-      github.event.label.name == 'agents:start'
-    
-    steps:
-      - name: Send stop webhook to Vercel
-        env:
-          VERCEL_WEBHOOK_URL: ${{ secrets.VERCEL_WEBHOOK_URL }}
-        run: |
-          curl -X POST "$VERCEL_WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "action": "stop_processing",
-              "issue_number": ${{ github.event.issue.number }},
-              "repository": "${{ github.repository }}"
-            }'
-
-  # ============================================
-  # JOB 3: Handle Human Responses
-  # ============================================
-  handle-human-response:
-    name: Handle Human Response
-    runs-on: ubuntu-latest
-    # Only run when comment is NOT from a bot
-    if: |
-      github.event_name == 'issue_comment' && 
-      github.event.action == 'created' &&
-      !contains(github.event.comment.body, '🤖') &&
-      github.actor != 'github-actions[bot]'
-    
-    steps:
-      - name: Check if issue has agents:start label
-        id: check_label
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const issue = await github.rest.issues.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number
-            });
-            
-            const hasLabel = issue.data.labels.some(
-              label => label.name === 'agents:start'
-            );
-            
-            core.setOutput('has_label', hasLabel);
-            return hasLabel;
-      
-      - name: Send response to Vercel
-        if: steps.check_label.outputs.has_label == 'true'
-        env:
-          VERCEL_WEBHOOK_URL: ${{ secrets.VERCEL_WEBHOOK_URL }}
-        run: |
-          curl -X POST "$VERCEL_WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "action": "human_response",
-              "issue_number": ${{ github.event.issue.number }},
-              "comment_id": ${{ github.event.comment.id }},
-              "comment_body": ${{ toJSON(github.event.comment.body) }},
-              "comment_author": "${{ github.event.comment.user.login }}",
-              "repository": "${{ github.repository }}"
-            }'
-
-  # ============================================
-  # JOB 4: QA Review for Pull Requests
-  # ============================================
-  qa-review:
-    name: QA Agent Review
-    runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'pull_request' && 
-      (github.event.action == 'opened' || github.event.action == 'synchronize')
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-      
-      - name: Get PR diff
-        id: get_diff
-        run: |
-          git diff origin/${{ github.event.pull_request.base.ref }}...HEAD > pr_diff.txt
-          echo "Diff saved to pr_diff.txt"
-      
-      - name: Run automated tests
-        id: run_tests
-        continue-on-error: true
-        run: |
-          # Install dependencies and run tests
-          npm ci
-          npm run test -- --coverage
-      
-      - name: Send to QA Agent
-        env:
-          VERCEL_WEBHOOK_URL: ${{ secrets.VERCEL_WEBHOOK_URL }}
-        run: |
-          # Get test results
-          TEST_RESULT="${{ steps.run_tests.outcome }}"
+          # Map repository_dispatch type to action
+          ACTION="${{ github.event.action }}"
           
-          # Read diff content
-          DIFF_CONTENT=$(cat pr_diff.txt | base64 -w 0)
+          # Convert action names (agent_start -> start_processing)
+          case "$ACTION" in
+            "agent_start")
+              ACTION="start_processing"
+              ;;
+            "agent_stop")
+              ACTION="stop_processing"
+              ;;
+          esac
+          
+          # Build payload with action and client_payload data
+          PAYLOAD=$(jq -n \
+            --arg action "$ACTION" \
+            --argjson client_payload '${{ toJSON(github.event.client_payload) }}' \
+            '{action: $action} + $client_payload')
+          
+          echo "Sending to Vercel: $PAYLOAD"
           
           curl -X POST "$VERCEL_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d '{
-              "action": "qa_review",
-              "pr_number": ${{ github.event.pull_request.number }},
-              "pr_title": "${{ github.event.pull_request.title }}",
-              "pr_body": ${{ toJSON(github.event.pull_request.body) }},
-              "diff": "'"$DIFF_CONTENT"'",
-              "test_result": "'"$TEST_RESULT"'",
-              "files_changed": ${{ github.event.pull_request.changed_files }},
-              "additions": ${{ github.event.pull_request.additions }},
-              "deletions": ${{ github.event.pull_request.deletions }},
-              "repository": "${{ github.repository }}"
-            }'
+            -d "$PAYLOAD"
 
   # ============================================
-  # JOB 5: Post-Merge Monitoring
-  # ============================================
-  post-merge-monitor:
-    name: Post-Merge Monitoring
-    runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'pull_request' && 
-      github.event.action == 'closed' && 
-      github.event.pull_request.merged == true
-    
-    steps:
-      - name: Notify monitoring agent
-        env:
-          VERCEL_WEBHOOK_URL: ${{ secrets.VERCEL_WEBHOOK_URL }}
-        run: |
-          curl -X POST "$VERCEL_WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "action": "post_merge_monitor",
-              "pr_number": ${{ github.event.pull_request.number }},
-              "pr_title": "${{ github.event.pull_request.title }}",
-              "merged_by": "${{ github.event.pull_request.merged_by.login }}",
-              "merge_commit_sha": "${{ github.event.pull_request.merge_commit_sha }}",
-              "repository": "${{ github.repository }}"
-            }'
-
-  # ============================================
-  # JOB 6: Weekly Refactoring Scan
+  # JOB 2: Weekly Refactoring Scan
   # ============================================
   weekly-refactor-scan:
     name: Weekly Refactoring Scan
     runs-on: ubuntu-latest
-    # Run every Friday at 9 AM UTC
     if: github.event_name == 'schedule'
     
+    strategy:
+      matrix:
+        repo: 
+          - Cherry-Application/cherry-frontend
+          # Add more repos as needed:
+          # - Cherry-Application/cherry-backend
+          # - Cherry-Application/cherry-mobile
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      
-      - name: Trigger refactoring scan
+      - name: Trigger refactoring scan for ${{ matrix.repo }}
         env:
           VERCEL_WEBHOOK_URL: ${{ secrets.VERCEL_WEBHOOK_URL }}
         run: |
@@ -229,28 +105,38 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{
               "action": "refactor_scan",
-              "repository": "${{ github.repository }}",
+              "repository": "${{ matrix.repo }}",
               "branch": "main"
             }'
 
-# Add scheduled trigger for weekly scan
-on:
-  schedule:
-    # Every Friday at 9 AM UTC
-    - cron: '0 9 * * 5'
-
-  issues:
-    types: [labeled, unlabeled]
-  
-  issue_comment:
-    types: [created]
-  
-  pull_request:
-    types: [opened, synchronize, ready_for_review, closed]
-  
-  workflow_dispatch:
-    inputs:
-      issue_number:
-        description: 'Issue number to process'
-        required: true
-        type: number
+  # ============================================
+  # JOB 3: Manual Trigger Handler
+  # ============================================
+  manual-trigger:
+    name: Manual Trigger
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Execute manual action
+        env:
+          VERCEL_WEBHOOK_URL: ${{ secrets.VERCEL_WEBHOOK_URL }}
+        run: |
+          PAYLOAD='{
+            "action": "${{ github.event.inputs.action }}"'
+          
+          if [ -n "${{ github.event.inputs.issue_number }}" ]; then
+            PAYLOAD="$PAYLOAD, \"issue_number\": ${{ github.event.inputs.issue_number }}"
+          fi
+          
+          if [ -n "${{ github.event.inputs.repository }}" ]; then
+            PAYLOAD="$PAYLOAD, \"repository\": \"${{ github.event.inputs.repository }}\""
+          fi
+          
+          PAYLOAD="$PAYLOAD }"
+          
+          echo "Sending: $PAYLOAD"
+          
+          curl -X POST "$VERCEL_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"
