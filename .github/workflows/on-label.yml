@@ -71,6 +71,11 @@ jobs:
     if: |
       github.event_name == 'issue_comment' && 
       github.event.action == 'created' &&
+      github.event.comment.user.type != 'Bot' &&
+      !contains(github.event.comment.body, 'Team Lead') &&
+      !contains(github.event.comment.body, 'Delegating to') &&
+      !contains(github.event.comment.body, 'agent...') &&
+      !contains(github.event.comment.body, 'result:') &&
       !startsWith(github.event.comment.body, '🤖') &&
       !startsWith(github.event.comment.body, '🤔') &&
       !startsWith(github.event.comment.body, '📋') &&
@@ -81,7 +86,13 @@ jobs:
       !startsWith(github.event.comment.body, '🛑') &&
       !startsWith(github.event.comment.body, '🔍') &&
       !startsWith(github.event.comment.body, '🔧') &&
-      !startsWith(github.event.comment.body, '⚠️')
+      !startsWith(github.event.comment.body, '⚠️') &&
+      !startsWith(github.event.comment.body, '❌') &&
+      !startsWith(github.event.comment.body, '❓') &&
+      !startsWith(github.event.comment.body, '🧪') &&
+      !startsWith(github.event.comment.body, '🚀') &&
+      !startsWith(github.event.comment.body, '⏭️') &&
+      !startsWith(github.event.comment.body, '🚫')
     runs-on: ubuntu-latest
     steps:
       - name: Check for agent label
