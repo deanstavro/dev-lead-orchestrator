@@ -45,11 +45,21 @@ export class ToolExecutor {
   }
 
   private resolvePath(relativePath: string): string {
-    // Prevent directory traversal
-    const resolved = path.resolve(this.repoPath, relativePath);
-    if (!resolved.startsWith(this.repoPath)) {
+    // Normalize the repo path (resolve to absolute, ensure consistent format)
+    const normalizedRepoPath = path.resolve(this.repoPath);
+    
+    // Clean the relative path (remove leading slashes, normalize)
+    const cleanRelativePath = relativePath.replace(/^\/+/, '').replace(/\.\.\//g, '');
+    
+    // Resolve the full path
+    const resolved = path.resolve(normalizedRepoPath, cleanRelativePath);
+    
+    // Security check: ensure resolved path is within repo
+    if (!resolved.startsWith(normalizedRepoPath + path.sep) && resolved !== normalizedRepoPath) {
+      console.error(`Path traversal blocked: ${relativePath} resolved to ${resolved}, repo is ${normalizedRepoPath}`);
       throw new Error('Path traversal not allowed');
     }
+    
     return resolved;
   }
 

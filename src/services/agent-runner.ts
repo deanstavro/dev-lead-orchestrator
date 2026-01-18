@@ -241,7 +241,11 @@ async function runImplementerAgent(
 
       const toolResults: Anthropic.ToolResultBlockParam[] = [];
       for (const toolUse of toolUseBlocks) {
+        console.log(`[Implementer] Tool: ${toolUse.name}`, JSON.stringify(toolUse.input).slice(0, 200));
+        
         const result = await executor.execute(toolUse.name, toolUse.input as Record<string, unknown>);
+        
+        console.log(`[Implementer] Result: ${result.success ? 'OK' : 'FAILED'} - ${(result.output || result.error || '').slice(0, 100)}`);
         
         if (toolUse.name === 'write_file' || toolUse.name === 'apply_diff') {
           const filePath = (toolUse.input as { path: string }).path;
