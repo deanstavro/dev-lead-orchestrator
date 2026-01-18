@@ -1,0 +1,24 @@
+{
+    "name": "cherry-automation",
+    "version": "1.0.0",
+    "type": "module",
+    "description": "AI agents for Cherry Application development workflow",
+    "main": "dist/index.js",
+    "scripts": {
+      "start": "tsx src/index.ts",
+      "dev": "tsx watch src/index.ts",
+      "build": "tsc",
+      "type-check": "tsc --noEmit"
+    },
+    "dependencies": {
+      "@anthropic-ai/sdk": "^0.32.1",
+      "@octokit/rest": "^21.0.2",
+      "@supabase/supabase-js": "^2.45.4",
+      "dotenv": "^16.4.5"
+    },
+    "devDependencies": {
+      "@types/node": "^22.10.2",
+      "tsx": "^4.19.2",
+      "typescript": "^5.7.2"
+    }
+  }
