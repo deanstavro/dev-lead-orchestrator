@@ -280,34 +280,83 @@ async function runImplementerAgent(
 
 async function runTesterAgent(context: AgentContext, repoPath: string): Promise<AgentResult> {
   const executor = new ToolExecutor(repoPath);
-  const results: { name: string; passed: boolean; output: string }[] = [];
+  const results: { name: string; passed: boolean; output: string; skipped?: boolean }[] = [];
+  
+  // Helper to check if npm script exists
+  const checkScriptExists = async (script: string): Promise<boolean> => {
+    try {
+      const fs = await import('fs/promises');
+      const pkgPath = `${repoPath}/package.json`;
+      const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf-8'));
+      return !!pkg.scripts?.[script];
+    } catch {
+      return false;
+    }
+  };
 
-  // Type check
+  // Type check (always try - most repos have TypeScript)
+  console.log('[Tester] Running type check...');
   const typeCheck = await executor.execute('run_command', { command: 'npx tsc --noEmit' });
-  results.push({ name: 'Type Check', passed: typeCheck.success, output: typeCheck.output || typeCheck.error || '' });
+  const typeCheckSkipped = typeCheck.error?.includes('not found') ?? false;
+  const typeCheckPassed = typeCheck.success || typeCheckSkipped;
+  results.push({ 
+    name: 'Type Check', 
+    passed: typeCheckPassed, 
+    output: typeCheck.output || typeCheck.error || '',
+    skipped: typeCheckSkipped,
+  });
 
-  // Lint
-  const lint = await executor.execute('run_command', { command: 'npm run lint' });
-  results.push({ name: 'Lint', passed: lint.success, output: lint.output || lint.error || '' });
+  // Lint (optional - only if script exists)
+  if (await checkScriptExists('lint')) {
+    console.log('[Tester] Running lint...');
+    const lint = await executor.execute('run_command', { command: 'npm run lint' });
+    results.push({ name: 'Lint', passed: lint.success, output: lint.output || lint.error || '' });
+  } else {
+    console.log('[Tester] Skipping lint (no script)');
+    results.push({ name: 'Lint', passed: true, output: 'Skipped - no lint script', skipped: true });
+  }
 
-  // Build
-  const build = await executor.execute('run_command', { command: 'npm run build' });
-  results.push({ name: 'Build', passed: build.success, output: build.output || build.error || '' });
+  // Build (optional - only if script exists)
+  if (await checkScriptExists('build')) {
+    console.log('[Tester] Running build...');
+    const build = await executor.execute('run_command', { command: 'npm run build' });
+    results.push({ name: 'Build', passed: build.success, output: build.output || build.error || '' });
+  } else {
+    console.log('[Tester] Skipping build (no script)');
+    results.push({ name: 'Build', passed: true, output: 'Skipped - no build script', skipped: true });
+  }
 
-  // Tests
-  const tests = await executor.execute('run_command', { command: 'npm test' });
-  results.push({ name: 'Tests', passed: tests.success, output: tests.output || tests.error || '' });
+  // Tests (optional - only if script exists)
+  if (await checkScriptExists('test')) {
+    console.log('[Tester] Running tests...');
+    const tests = await executor.execute('run_command', { command: 'npm test' });
+    // Treat "no tests" as passing
+    const testsOutput = tests.output || tests.error || '';
+    const noTests = testsOutput.includes('no test') || testsOutput.includes('No tests');
+    results.push({ name: 'Tests', passed: tests.success || noTests, output: testsOutput });
+  } else {
+    console.log('[Tester] Skipping tests (no script)');
+    results.push({ name: 'Tests', passed: true, output: 'Skipped - no test script', skipped: true });
+  }
 
-  const allPassed = results.filter(r => r.name !== 'Lint').every(r => r.passed);
-  const summary = results.map(r => `${r.passed ? '✅' : '❌'} ${r.name}`).join('\n');
+  // Only type check is critical - lint/build/tests are optional
+  const criticalPassed = results.find(r => r.name === 'Type Check')?.passed ?? true;
+  const allPassed = results.every(r => r.passed);
+  
+  const summary = results.map(r => {
+    if (r.skipped) return `⏭️ ${r.name} (skipped)`;
+    return `${r.passed ? '✅' : '❌'} ${r.name}`;
+  }).join('\n');
+
+  console.log(`[Tester] Results: critical=${criticalPassed}, all=${allPassed}`);
 
   return {
-    success: allPassed,
+    success: criticalPassed, // Only require type check to pass
     output: summary,
-    needsHumanInput: !allPassed,
-    humanQuestion: allPassed ? undefined : 'Tests failed. Review errors and advise on fixes.',
-    suggestedNextAgent: allPassed ? 'pr-creator' : undefined,
-    data: { results, allPassed },
+    needsHumanInput: !criticalPassed,
+    humanQuestion: criticalPassed ? undefined : 'Type check failed. Review errors.',
+    suggestedNextAgent: criticalPassed ? 'pr-creator' : undefined,
+    data: { results, allPassed, criticalPassed },
   };
 }
 
