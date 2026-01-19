@@ -23,7 +23,7 @@ export interface ClaudeCodeResult {
 
 export class ToolExecutor {
   private repoPath: string;
-  private maxOutputLength = 10000; // Limit output to avoid token explosion
+  private maxOutputLength = 100000; // Increased limit to see full files (was 10000)
 
   constructor(repoPath: string) {
     this.repoPath = repoPath;

@@ -274,7 +274,7 @@ async function runImplementerAgent(
     if (!planResult.success) {
       console.log('[Implementer] Claude Code not available, falling back to basic tools');
       // Fall back to basic implementation
-      return await runBasicImplementer(executor, baseContext);
+      return await runBasicImplementer(executor, baseContext, plan, design);
     }
     
     // Return plan for human approval
@@ -293,7 +293,7 @@ async function runImplementerAgent(
   
   // For simple tasks, use basic tool-based implementation
   console.log('[Implementer] Using basic tools for implementation');
-  return await runBasicImplementer(executor, baseContext);
+  return await runBasicImplementer(executor, baseContext, plan, design);
 }
 
 /**
@@ -331,14 +331,116 @@ async function executeWithClaudeCode(
 }
 
 /**
+ * Extract file paths mentioned in plan/design text
+ */
+function extractFilePaths(text: string): string[] {
+  const paths: string[] = [];
+  
+  // Match patterns like: src/components/Button.tsx, app/admin/page.tsx, etc.
+  const filePatterns = text.match(/[\w\-\/]+\.(tsx?|jsx?|json|css|md)/g) || [];
+  
+  for (const match of filePatterns) {
+    // Clean up the path
+    const cleanPath = match.replace(/^[^\w]/, '');
+    if (!paths.includes(cleanPath) && cleanPath.includes('/')) {
+      paths.push(cleanPath);
+    }
+  }
+  
+  return paths;
+}
+
+/**
+ * Gather initial codebase context before implementation
+ */
+async function gatherInitialContext(
+  executor: ToolExecutor,
+  plan: string,
+  design: string
+): Promise<string> {
+  console.log('[Implementer] Gathering initial codebase context...');
+  
+  const contextParts: string[] = [];
+  
+  // 1. Get directory structure
+  try {
+    const dirResult = await executor.execute('list_directory', { path: '.', recursive: false });
+    if (dirResult.success) {
+      contextParts.push(`## Project Structure (root)\n${dirResult.output}`);
+    }
+  } catch (e) {
+    console.log('[Implementer] Could not read root directory');
+  }
+  
+  // 2. Read package.json for dependencies and scripts
+  try {
+    const pkgResult = await executor.execute('read_file', { path: 'package.json' });
+    if (pkgResult.success) {
+      contextParts.push(`## package.json\n${pkgResult.output.slice(0, 3000)}`);
+    }
+  } catch (e) {
+    console.log('[Implementer] Could not read package.json');
+  }
+  
+  // 3. Extract and read files mentioned in plan/design
+  const mentionedFiles = extractFilePaths(`${plan} ${design}`);
+  console.log(`[Implementer] Files mentioned in plan: ${mentionedFiles.join(', ') || 'none'}`);
+  
+  for (const filePath of mentionedFiles.slice(0, 5)) { // Limit to first 5 files
+    try {
+      const fileResult = await executor.execute('read_file', { path: filePath });
+      if (fileResult.success) {
+        contextParts.push(`## ${filePath}\n${fileResult.output}`);
+        console.log(`[Implementer] Pre-read: ${filePath} (${fileResult.output.length} chars)`);
+      }
+    } catch (e) {
+      console.log(`[Implementer] Could not pre-read: ${filePath}`);
+    }
+  }
+  
+  // 4. If plan mentions a specific directory, explore it
+  const dirPatterns = plan.match(/(?:app|src|components|lib|pages)\/[\w\-\/]+/g) || [];
+  const uniqueDirs = [...new Set(dirPatterns.map(p => p.split('/').slice(0, 2).join('/')))];
+  
+  for (const dir of uniqueDirs.slice(0, 3)) { // Limit to first 3 directories
+    try {
+      const dirResult = await executor.execute('list_directory', { path: dir, recursive: false });
+      if (dirResult.success) {
+        contextParts.push(`## Directory: ${dir}\n${dirResult.output}`);
+        console.log(`[Implementer] Pre-explored: ${dir}`);
+      }
+    } catch (e) {
+      console.log(`[Implementer] Could not explore: ${dir}`);
+    }
+  }
+  
+  if (contextParts.length === 0) {
+    return '';
+  }
+  
+  console.log(`[Implementer] Gathered ${contextParts.length} context sections`);
+  return `\n\n# Pre-gathered Codebase Context\n\n${contextParts.join('\n\n')}`;
+}
+
+/**
  * Basic tool-based implementation (original approach)
  */
 async function runBasicImplementer(
   executor: ToolExecutor,
-  baseContext: string
+  baseContext: string,
+  plan?: string,
+  design?: string
 ): Promise<AgentResult> {
+  // Gather initial context from codebase
+  const initialContext = await gatherInitialContext(executor, plan || '', design || '');
+  
+  const enrichedContext = `${baseContext}${initialContext}
+
+IMPORTANT: I've pre-loaded key files above. Use this context to understand the codebase structure. 
+Focus on making targeted changes rather than exploring extensively.`;
+
   const messages: Anthropic.MessageParam[] = [
-    { role: 'user', content: `${baseContext}\n\nBegin implementation. Explore the codebase first, then make changes.` },
+    { role: 'user', content: `${enrichedContext}\n\nBegin implementation. Make targeted changes based on the context provided above.` },
   ];
 
   const changedFiles: string[] = [];

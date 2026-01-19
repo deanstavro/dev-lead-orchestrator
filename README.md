@@ -132,11 +132,19 @@ Should the new auth flow use Server Actions or API routes?"
 ### 🔧 Implementer
 **Purpose**: Write actual code changes  
 **Tools**: Full read/write access + npm commands + Claude Code CLI  
-**Loop**: Up to 100 iterations until task complete
+**Loop**: Up to 1000 iterations until task complete
 
-**Smart Routing**: Implementer analyzes task complexity and chooses the best approach:
-- **Simple tasks** (≤3 files): Uses basic tools (read/write/apply_diff)
-- **Complex tasks** (>3 files, refactors, migrations): Uses Claude Code CLI
+**Smart Initial Exploration**: Before implementing, the agent automatically:
+1. Reads root directory structure
+2. Reads `package.json` for dependencies
+3. Pre-reads files mentioned in the plan (up to 5)
+4. Explores directories mentioned in the plan
+
+This gives the implementer context **before it starts guessing**.
+
+**Smart Routing**: Analyzes task complexity and chooses the best approach:
+- **Simple tasks** (score < 25): Uses basic tools with pre-gathered context
+- **Complex tasks** (score ≥ 25): Uses Claude Code CLI
 
 For complex tasks, a **plan-approve-execute** flow is used:
 1. Claude Code generates a detailed plan
@@ -204,11 +212,12 @@ For complex implementation tasks, Cherry Automation integrates with **Claude Cod
 |-----------|-------|
 | More than 3 files mentioned | +30 |
 | Contains "refactor", "migrate", "upgrade" | +15 each |
+| Contains "tab", "navigation", "route", "layout" | +15 each |
 | "Codebase-wide" or "project-wide" | +25 |
 | "Architectural" or "restructure" | +20 |
 | Migration pattern (from X to Y) | +20 |
 
-**Threshold**: Score ≥ 40 triggers Claude Code
+**Threshold**: Score ≥ 25 triggers Claude Code (lowered from 40)
 
 ### Plan Approval Commands
 
@@ -405,7 +414,8 @@ Issue: "Add dark mode toggle to settings"
 | Claude Code timeout | 10 min | Large refactors need time |
 | Team Lead iterations | 25 | Prevent infinite loops |
 | Workflow timeout | 30 min | GitHub Actions limit |
-| Complexity threshold | 40 | Score to trigger Claude Code |
+| Complexity threshold | 25 | Score to trigger Claude Code (lowered) |
+| File read limit | 100,000 chars | See full files (was 10,000) |
 | Protected files | `.env`, `.git`, `node_modules` | Security |
 | Command whitelist | `npm test/build/lint`, `claude` | Safety |
 

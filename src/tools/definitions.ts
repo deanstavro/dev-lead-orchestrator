@@ -180,8 +180,8 @@ export const ALLOWED_COMMANDS = [
 
 // Complexity analysis configuration
 export const COMPLEXITY_THRESHOLDS = {
-  fileCountThreshold: 3,      // More than 3 files = complex
-  scoreThreshold: 40,         // Score >= 40 triggers Claude Code
+  fileCountThreshold: 2,      // More than 3 files = complex
+  scoreThreshold: 25,         // Score >= 25 triggers Claude Code (lowered from 40)
   complexKeywords: [
     'refactor',
     'migrate', 
@@ -193,6 +193,10 @@ export const COMPLEXITY_THRESHOLDS = {
     'project-wide',
     'architectural',
     'restructure',
+    'tab',           // UI tabs often involve multiple files
+    'navigation',    // Navigation changes span multiple files
+    'route',         // Routing changes
+    'layout',        // Layout changes
   ],
 };
 
