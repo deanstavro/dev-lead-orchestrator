@@ -401,7 +401,7 @@ Issue: "Add dark mode toggle to settings"
 | Limit | Value | Why |
 |-------|-------|-----|
 | Context iterations | 5-6 | Prevent endless exploration |
-| Implementer iterations (basic) | 100 | Complex changes need room |
+| Implementer iterations (basic) | 1000 | Complex changes need room |
 | Claude Code timeout | 10 min | Large refactors need time |
 | Team Lead iterations | 25 | Prevent infinite loops |
 | Workflow timeout | 30 min | GitHub Actions limit |

@@ -343,7 +343,7 @@ async function runBasicImplementer(
 
   const changedFiles: string[] = [];
   let iterations = 0;
-  const maxIterations = 100;
+  const maxIterations = 1000;
 
   while (iterations < maxIterations) {
     iterations++;
