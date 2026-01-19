@@ -1,4 +1,4 @@
-# Cherry Automation
+# Team Lead Automation
 
 AI-powered Team Lead agent that autonomously takes GitHub issues from creation to merged PR.
 
